@@ -1,0 +1,14 @@
+/*苍茫的天涯是我的爱！！*/
+int gcd(int a, int  b)
+{
+    if(a==0) return b;
+    else return gcd(b, b%a);
+}
+void main()
+{
+    int x;
+    int y;
+    x = input();
+    y = input();
+    output(gcd(x,y));
+}
