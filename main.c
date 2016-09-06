@@ -7,6 +7,9 @@
 #define false 0
 #define SHOW_LEX true
 #define BUFLEN 256
+#define maxChild 3
+#define size 211
+#define SHIFT 4
 
 static char lineBuf[BUFLEN]; /* holds the current line */
 static int linepos = 0; /* current position in LineBuf */
@@ -27,19 +30,21 @@ typedef enum {
 }StateType;
 typedef enum {stmtK, expK, decK} nodeKind;
 typedef enum {expstmtK, compdK, selectK, iteK, retK} stmtKind;
-typedef enum {idK, constK, emptyK, intK, simpK, varK, opK, callK} expKind;
+typedef enum {idK, constK, simpK, varK, opK, callK} expKind;
 //varK to check the assign exp
 //(id, num),(void, int),(simple, var = xx), op, call
+typedef enum { intK, emptyK }varType;
 typedef enum {fundK, vardK, arrK} decKind;    //变量和函数名放在符号表中
 
 static struct {
     char* str;
     TokenType tok;
-}reserveMap[maxsize] = {
+}reserveMap[reserveNum] = {
     {"if", IF}, {"else", ELSE}, {"int", INT}, {"return", RETURN}, {"void", VOID}, {"while", WHILE}
 };
 typedef struct node
 {
+    int lineno;
     int val;
     TokenType op;
     char* name;
@@ -48,7 +53,8 @@ typedef struct node
     nodeKind nodekind;
     expKind expkind;
     stmtKind stmtkind;
-    struct node *child[3], *silbing;
+    varType typ;
+    struct node *child[maxChild], *silbing;
 }node;
 TokenType checkReserve(char * s);
 int isnum(char c);
@@ -299,7 +305,7 @@ node* compdList();
 node* Declarates();
 node* declarationList();
 
-node* createNode(nodeKind op);
+node* createNode();
 node* createNode();
 void match(TokenType expected);
 TokenType token;
@@ -312,16 +318,16 @@ void match(TokenType expected)
         printToken(token,tmpstring);
     }
 }
-node* createNode(nodeKind op)
+node* createNode()
 {
     node* t = (node *)malloc(sizeof(node));
     if(!t) printf("no memory");
     else
     {
-        t->nodekind = op;
+        t->lineno = 0;
         t->silbing = NULL;
         int i=0;
-        for(i=0;i<3;i++) t->child[i]=NULL;
+        for(i=0;i<maxChild;i++) t->child[i]=NULL;
     }
     return t;
 }
@@ -349,9 +355,11 @@ node* specid()
 {
     node* t = createNode(decK);
     t->declaratkind = vardK;    //it's a vardeclaration
-    
-    if(token==INT) t->expkind= intK;
-    else if(token==VOID) t->expkind=emptyK;
+    t->lineno = line;
+    t->op = token;
+    t->expkind = idK;
+//    if(token==INT) t-= intK;
+//    else if(token==VOID) t->typ=emptyK;
     
     match(token);
     t->name = copyString(tmpstring);
@@ -686,12 +694,102 @@ node* parse()
     node* t=declarationList();
     return t;
 }
+
+//step 3
+typedef struct bucketList
+{
+    int lineno;
+    char *name;
+    int loc;
+    TokenType typ;
+    struct bucketList * next;
+}bucket;
+bucket* hs_table[size];
+int hash(char*s)
+{
+    int i=0,tmp=0;
+    while(s[i]!='\0')
+    {
+        tmp=((tmp<<SHIFT) + s[i]) % size;
+        i++;
+    }
+    return tmp;
+}
+void insertNode(node*);
+void nullProc(node*);
+void append(node* t, int loc);
+bucket* createBucNode(node*t);
+
+void travel(node *x, void(* preProc) (node*), void(* postProc)(node*))
+{
+    if(!x) return;
+    preProc(x);
+    int i;
+    for(i=0;i<maxChild;i++)
+        travel(x->child[i], preProc, postProc);
+    
+    travel(x->silbing, preProc, postProc);
+    postProc(x);
+}
+void nullProc(node* t){return;}
+void insertNode(node* t)
+{
+    if(!t) return;
+    if(t->expkind == idK)
+    {
+        int loc = hash(t->name);
+        append(t, loc);
+    }
+}
+bucket* createBucNode(node*t)
+{
+    bucket*x = (bucket*)malloc(sizeof(bucket));
+    x->lineno = t->lineno;
+    x->name = t->name;
+    x->typ = t->op;
+    x->next = NULL;
+    return x;
+}
+void append(node* t, int loc)
+{
+    bucket* x = createBucNode(t);
+    bucket* head = hs_table[loc];
+    if(!head) hs_table[loc] =x;
+    else
+    {
+        while(head && head->next) head=head->next;
+        head->next=x;
+    }
+}
+void outSympol()
+{
+    for(int i=0;i<size;i++)
+    {
+        if(hs_table[i])
+        {
+            printf("%s\t%d\t",hs_table[i]->name, hs_table[i]->typ);
+            bucket *p = hs_table[i];
+            while(p)
+            {
+                printf("%d ",p->lineno);
+                p=p->next;
+            }
+        }
+    }
+}
+void init()
+{
+    int i;
+    for(i=0;i<size;i++) hs_table[i]=NULL;
+}
 int main()
 {
+    init();
     source = fopen("/Users/summer/Documents/360/写个浪漫这么南/写个浪漫这么南/test.txt","r");
-//    freopen("/Users/summer/Documents/360/写个浪漫这么南/写个浪漫这么南/test.txt", "r", stdin);
 //        while(getToken()!=ENDFILE);
-    parse();
+    node* root = parse();
+    travel(root, insertNode, nullProc);
+    outSympol();
     printf("end\n");
     return 0;
 }
