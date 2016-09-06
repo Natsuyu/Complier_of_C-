@@ -27,8 +27,10 @@ typedef enum {
 }StateType;
 typedef enum {stmtK, expK, decK} nodeKind;
 typedef enum {expstmtK, compdK, selectK, iteK, retK} stmtKind;
-typedef enum {varK, simpK, arrK} expKind;
-typedef enum {fundK, vardK} decKind;    //变量和函数名放在符号表中
+typedef enum {idK, constK, emptyK, intK, simpK, varK, opK, callK} expKind;
+//varK to check the assign exp
+//(id, num),(void, int),(simple, var = xx), op, call
+typedef enum {fundK, vardK, arrK} decKind;    //变量和函数名放在符号表中
 
 static struct {
     char* str;
@@ -341,12 +343,17 @@ node* declarationList()
     }
     return t;
 }
-node* specid()       //type-specifier id
+//type-specifier id
+//return node{decK, vardK, varK, name}
+node* specid()
 {
     node* t = createNode(decK);
-    t->declaratkind = vardK;
+    t->declaratkind = vardK;    //it's a vardeclaration
+    
+    if(token==INT) t->expkind= intK;
+    else if(token==VOID) t->expkind=emptyK;
+    
     match(token);
-    t->expkind = varK;
     t->name = copyString(tmpstring);
     match(ID);
     return t;
@@ -356,7 +363,7 @@ void varDec(node* tmp)  //if the var is arr, change the value of expkind to arrK
     switch(token)
     {
         case LSQUAB:
-            tmp->expkind = arrK;
+            tmp->declaratkind = arrK;
             match(LSQUAB);
             tmp->val = atoi(tmpstring);
             match(NUM);
@@ -372,12 +379,14 @@ void varDec(node* tmp)  //if the var is arr, change the value of expkind to arrK
     }
 }
 
-node* param()
+node* param()      //match the param of function declaration
 {
     node*t = specid();
-    match(LSQUAB); match(RSQUAB);
+    if(token == LSQUAB) {match(LSQUAB); match(RSQUAB);}
     return t;
 }
+//just match params
+//return a linked list of params
 node* funcDec()
 {
     match(LBRACKET);
@@ -394,10 +403,10 @@ node* funcDec()
             p=q;
         }
     }
-    else
+    else    //if param is void, define that there is no more params after that
     {
-        t=createNode(constK);
-        t->name=copyString(tmpstring);
+        t=createNode(expK);
+        t->expkind = emptyK;
         match(VOID);
     }
     match(RBRACKET);
@@ -417,27 +426,30 @@ node* stmt()
     }
     return q;
 }
+//return a linked list of statement
 node* stmtList()
 {
     node* t = NULL;
     node* p = t;
-    while(token != RBRACE)
+    while(token != RBRACE)  //because statementlist only turn up in compound-stmt
     {
         node *q = stmt();
-        if(!t) t=p=q;
-        else
+        if(q)  //q may be a null pointer
         {
-            p->silbing=q;
-            p=q;
+            if(!t) t=p=q;
+            else
+            {
+                p->silbing=q;
+                p=q;
+            }
         }
     }
-//    match(RBRACE);
     return t;
 }
 
 node* seleStmt()
 {
-    node* t = createNode(idK);
+    node* t = createNode(stmtK);
     match(IF);
     match(LBRACKET);
     t->child[0]=epx();
@@ -448,24 +460,27 @@ node* seleStmt()
         match(ELSE);
         t->child[2]=stmt();
     }
+    t->stmtkind = selectK;
     return t;
 }
 node* iteraStmt()
 {
-    node*t = createNode(constK);
+    node*t = createNode(stmtK);
     match(WHILE);
     match(LBRACKET);
     t->child[0]=epx();
     match(RBRACKET);
     t->child[1]=stmt();
+    t->stmtkind = iteK;
     return t;
 }
 node* retStmt()
 {
-    node*t = createNode(constK);
+    node*t = createNode(stmtK);
     match(RETURN);
     if(token!=SEMI) t->child[0]=epx();
     match(SEMI);
+    t->stmtkind = retK;
     return t;
 }
 node* exps()
@@ -479,7 +494,14 @@ node* epx(void)
 {
     node* t = NULL;
     t=simple_exp();
-    if(t && t->expkind==varK) t->child[0]=epx();
+    if(t && t->expkind == varK) {   //in assign
+        node*p = createNode(expK);
+        p->expkind = opK;
+        p->op = EQ;
+        p->child[0] = t;
+        t=p;
+        t->child[1]=epx();
+    }
     return t;
 }
 node* simple_exp()
@@ -488,7 +510,7 @@ node* simple_exp()
     if(t->expkind==varK) return t;
     if(token==LT || token==LEQ || token==GT || token==GEQ || token==DEQ || token==NEQ)
     {
-        node*p = createNode(opK);
+        node*p = createNode(expK);
         p->op=token;
         match(token);
         p->child[0]=t;
@@ -503,7 +525,7 @@ node* addexp()
     if(t->expkind==varK) return t;
     while(token==PLUS || token==MINUS)
     {
-        node* p = createNode(opK);
+        node* p = createNode(expK);
         p->op = token;
         match(token);
         p->child[0]=t;
@@ -515,10 +537,15 @@ node* addexp()
 node* term()
 {
     node* t = factor();
-    if(t->expkind==varK) return t;
+    if(token==EQ)
+    {
+        t->expkind=varK;
+        match(EQ);
+        return t;
+    }
     while(token==TIMES || token==DIVIDE)
     {
-        node* p = createNode(opK);
+        node* p = createNode(expK);
         p->op=token;
         match(token);
         p->child[0]=t;
@@ -532,7 +559,8 @@ node* factor()
     node* t = NULL;
     switch (token) {
         case NUM:
-            t=createNode(constK);
+            t=createNode(expK);
+            t->expkind = constK;
             t->val=atoi(tmpstring);
             match(NUM);
             break;
@@ -542,26 +570,25 @@ node* factor()
             match(RBRACKET);
             break;
         case ID:
-            t=createNode(idK);
+            t=createNode(expK);
+            t->expkind = idK;
             t->name = copyString(tmpstring);
             match(ID);
-            if(token==LBRACKET)
+            if(token==LBRACKET)     //it's call
             {
+                t->expkind = callK;
                 t->child[0]=call();
                 match(RBRACKET);
             }
-            else if(token==LSQUAB)
+            else if(token==LSQUAB)  //arr
             {
                 match(LSQUAB);
-                node* p = createNode(arrK);    //pay attention about the type of node
-                p->expkind = arrK;
-                p->child[0]=t;
-                p->child[1]=epx();
+                node* p = createNode(expK);    //pay attention about the type of node
+                p->declaratkind = arrK;
+                p->name = t->name;
+                p->child[0]=epx();
                 t=p;
-            }else if(token == EQ)
-            {
-                t->expkind=varK;
-                match(EQ);
+                match(RSQUAB);
             }
             break;
         default:
@@ -605,7 +632,7 @@ node* var()
 node* compdList()
 {
     match(LBRACE);
-    node* ret = createNode(constK);
+    node* ret = createNode(stmtK);
     node* t = NULL;
     node* p = t;
     if(token!=RBRACE)
@@ -620,27 +647,27 @@ node* compdList()
                 p->silbing=q;
                 p=q;
             }
-//            match(SEMI);
         }
-        ret->child[0]=t;
+        ret->child[0]=t;   //local declaration
         if(token!=RBRACE)
         {
-            ret->child[1]=stmtList();
+            ret->child[1]=stmtList();   //statment list
         }
     }
     match(RBRACE);
-    return t;
+    ret->stmtkind = compdK;
+    return ret;
 }
 node* Declarates()
 {
-    node* t = createNode(constK);
+    node* t = createNode(decK);
     node* p = specid();
-
     t->child[0]=p;
     switch (token) {
         case SEMI:
         case LSQUAB:
             varDec(p);
+            t=p;
             break;
         case LBRACKET:
             t->child[1]=funcDec();
