@@ -5,6 +5,17 @@
 #define reserveNum 6
 #define true 1
 #define false 0
+#define SHOW_LEX true
+#define BUFLEN 256
+
+static char lineBuf[BUFLEN]; /* holds the current line */
+static int linepos = 0; /* current position in LineBuf */
+static int bufsize = 0; /* current size of buffer string */
+static int EOF_flag = false; /* corrects ungetNextChar behavior on EOF */
+int EchoSource = false;
+FILE * source;
+int line=0;
+
 typedef enum {
     ENDFILE, NUM, ID, ASSIGN, PLUS, MINUS, TIMES, DIVIDE, LT, LEQ, GT, GEQ, DEQ, NEQ, EQ,
     SEMI, COMMA, LBRACKET, RBRACKET, LSQUAB, RSQUAB, LBRACE, RBRACE, NOT, ERR,
@@ -31,12 +42,16 @@ typedef struct node
     TokenType op;
     char* name;
     int childNum;
-    declaratKind declaratkind;
+    TokenType declaratkind;
     nodeKind nodekind;
     expKind expkind;
     stmtKind stmtkind;
     struct node *child[3], *silbing;
 }node;
+TokenType checkReserve(char * s);
+int isnum(char c);
+int isid(char c);
+char* copyString(char * s);
 
 TokenType checkReserve(char * s){
     int i;
@@ -56,7 +71,7 @@ char* copyString(char * s)
     char * t;
     if (s==NULL) return NULL;
     n = strlen(s)+1;
-    t = malloc(n);
+    t = (char*)malloc(n);
     if (t==NULL)
         printf("error");
     else strcpy(t,s);
@@ -64,10 +79,28 @@ char* copyString(char * s)
 }
 //step 1 declearation
 int backtrace = false;
-char pre;
 char tmpstring[maxsize];
-int line=1;
+
 //
+static int getNextChar(void)
+{ if (!(linepos < bufsize))
+{
+    line++;
+    if (fgets(lineBuf,BUFLEN-1,source))
+    { if (EchoSource) printf("%4d: %s",line,lineBuf);
+        bufsize = strlen(lineBuf);
+        linepos = 0;
+        return lineBuf[linepos++];
+    }
+    else
+    { EOF_flag = true;
+        return EOF;
+    }
+}
+else return lineBuf[linepos++];
+}
+static void ungetNextChar(void)
+{ if (!EOF_flag) linepos-- ;}
 void printToken(TokenType currentToken, char* s){
     switch (currentToken) {
         case NUM:
@@ -132,20 +165,20 @@ TokenType getToken()
     int save=true;
     int top=0;
     while(state != DONE){
-        if(!backtrace) c = getchar();
-        backtrace = false;
+        c=getNextChar();
+//        if(!backtrace) c = getchar();
+//        backtrace = false;
         save = true;
-        //        printf("%c,",c);
-        if(c=='\377') return ENDFILE;
+//        if(c=='\377') return ENDFILE;
         switch (state) {
             case START:
-                if(isdigit(c)) state = INNUM;
+                if(isnum(c)) state = INNUM;
                 else if(isid(c)) state = INID;
-                else if(c == ' ' || c == '\t' || c== '\n') {save  = false;if(c=='\n') line++;}
+                else if(c == ' ' || c == '\t' || c== '\n') {save  = false;}
                 else if(c == '/') {
-                    pre = getchar();
+                    char pre=getNextChar();
                     if(pre=='*') save = false, state = INCOMMENT;
-                    else state = DONE, currentToken = DIVIDE, backtrace = true, c=pre;
+                    else state = DONE, currentToken = DIVIDE, ungetNextChar();
                 }
                 else {
                     state = DONE;
@@ -188,7 +221,7 @@ TokenType getToken()
             case INCOMMENT:
                 save = false;
                 if(c=='*') {
-                    pre = getchar();
+                    char pre = getNextChar();
                     if(pre=='/') state = START;
                     else if(pre==EOF) state = DONE, currentToken = ENDFILE;
                 }
@@ -198,30 +231,32 @@ TokenType getToken()
                     save = false,
                     state = DONE,
                     currentToken = NUM,
-                    backtrace = true;
+//                    backtrace = true;
+                    ungetNextChar();
                 break;
             case INID:
                 if(!isid(c))
                     save = false,
                     state = DONE,
                     currentToken = ID,
-                    backtrace = true;
+//                    backtrace = true;
+                    ungetNextChar();
                 break;
             case INGEQ:
                 if(c=='=') state = DONE, currentToken=GEQ;
-                else state=DONE, backtrace=true;
+                else state=DONE, ungetNextChar();;
                 break;
             case INLEQ:
                 if(c=='=') state = DONE, currentToken=LEQ;
-                else state=DONE, backtrace=true;
+                else state=DONE, ungetNextChar();;
                 break;
             case INDEQ:
                 if(c=='=') state = DONE, currentToken=DEQ;
-                else state=DONE, backtrace=true;
+                else state=DONE, ungetNextChar();;
                 break;
             case INNEQ:
                 if(c=='=') state = DONE, currentToken=NEQ;
-                else currentToken = ERR, backtrace = true;
+                else currentToken = ERR, ungetNextChar();;
         }
         if(save && top<maxsize)
             tmpstring[top++]=c;
@@ -231,8 +266,11 @@ TokenType getToken()
                 currentToken = checkReserve(tmpstring);
         }
     }
-    printf("line %d: ",line);
-    printToken(currentToken, tmpstring);
+    if(SHOW_LEX)
+    {
+        printf("line %d: ",line);
+        printToken(currentToken, tmpstring);
+    }
     return currentToken;
 }
 //<函数定义> -> <类型> <变量> ( <参数声明> ) { <函数块> }
@@ -261,9 +299,10 @@ node* declarationList();
 
 
 node* createNode(expKind op);
+node* createNode();
 void match(TokenType expected);
-
 TokenType token;
+
 void match(TokenType expected)
 {
     if(expected == token) token=getToken();
@@ -274,11 +313,11 @@ void match(TokenType expected)
 }
 node* createNode(expKind op)
 {
-    node*t = (node *)malloc(sizeof(node));
+    node* t = (node *)malloc(sizeof(node));
     if(!t) printf("no memory");
     else
     {
-        t->expkind = op;
+//        t->expkind = op;
         t->silbing = NULL;
         int i=0;
         for(i=0;i<3;i++) t->child[i]=NULL;
@@ -336,22 +375,40 @@ void varDec(node* tmp)
 
 node* param()
 {
+//    node*t = createNode(constK);
+//    t->name = copyString(tmpstring);
+//    match(token);
+    
     node*t = specid();
-    if(token==LSQUAB) match(LSQUAB), match(RSQUAB);
+    if(token==LSQUAB) {match(LSQUAB); match(RSQUAB);}
+    
     return t;
 }
 node* funcDec()
 {
     match(LBRACKET);
-    node* t = param();
-    node* p = t;
-    while(token!=RBRACKET)
+    node*t = NULL;
+    if(token!=VOID)
     {
-        match(COMMA);
-        node* q = param();
-        p->silbing = q;
-        p=q;
+        node* t = param();
+        node* p = t;
+        while(token!=RBRACKET)
+        {
+            match(COMMA);
+            node* q = param();
+            p->silbing = q;
+            p=q;
+        }
+
     }
+    else
+    {
+        t=createNode(constK);
+        t->name=copyString(tmpstring);
+        match(VOID);
+        
+    }
+    match(RBRACKET);
     return t;
 }
 node* stmt()
@@ -381,6 +438,7 @@ node* stmtList()
             p=q;
         }
     }
+    match(RBRACE);
     return t;
 }
 
@@ -427,8 +485,7 @@ node* exps()
 node* epx(void)
 {
     node* t = NULL;
-    if(token==ID) t=var();
-    else t = simple_exp();
+    t=simple_exp();
     return t;
 }
 node* simple_exp()
@@ -441,7 +498,6 @@ node* simple_exp()
         match(token);
         p->child[0]=t;
         t=p;
-        match(token);
         t->child[1]=addexp();
     }
     return t;
@@ -493,16 +549,20 @@ node* factor()
             t->name = copyString(tmpstring);
             match(ID);
             if(token==LBRACKET)
+            {
                 t=call();
+                match(RBRACKET);
+            }
             else if(token==LSQUAB)
             {
                 match(LSQUAB);
-                node* p = createNode(token);    //pay attention about the type of node
+                node* p = createNode(arrK);    //pay attention about the type of node
                 p->expkind = arrK;
                 p->child[0]=t;
                 p->child[1]=epx();
                 t=p;
             }
+            break;
         default:
             printf("ERROR\n");
             break;
@@ -518,7 +578,8 @@ node* call()
     node*p=t;
     while(token==COMMA)
     {
-        node* q=createNode(expK);
+        match(COMMA);
+        node* q=epx();
         p->silbing=q;
         p=q;
     }
@@ -526,13 +587,13 @@ node* call()
 }
 node* var()
 {
-    node* t= createNode(token);
+    node* t= createNode(constK);
     t->name = copyString(tmpstring);
     match(ID);
     if(token==LSQUAB)
     {
         match(LSQUAB);
-        node* p = createNode(token);    //pay attention about the type of node
+        node* p = createNode(constK);    //pay attention about the type of node
         p->expkind = arrK;
         p->child[0]=t;
         p->child[1]=epx();
@@ -553,9 +614,9 @@ node* compdList()
             p=specid();
             varDec(p);
             t=p;
-            while(token==COMMA)
+            while(token==SEMI)
             {
-                match(COMMA);
+                match(SEMI);
                 node* q= specid();
                 varDec(q);
                 p->silbing=q;
@@ -568,12 +629,14 @@ node* compdList()
             ret->child[1]=stmtList();
         }
     }
+    match(RBRACE);
     return t;
 }
 node* Declarates()
 {
     node* t = createNode(constK);
     node* p = specid();
+
     t->child[0]=p;
     switch (token) {
         case SEMI:
@@ -593,13 +656,15 @@ node* Declarates()
 node* parse()
 {
     token=getToken();
+    
     node* t=declarationList();
     return t;
 }
 int main()
 {
-    freopen("/Users/summer/Documents/360/写个浪漫这么南/写个浪漫这么南/test.txt", "r", stdin);
-//    while(getToken()!=ENDFILE);
+    source = fopen("/Users/summer/Documents/360/写个浪漫这么南/写个浪漫这么南/test.txt","r");
+//    freopen("/Users/summer/Documents/360/写个浪漫这么南/写个浪漫这么南/test.txt", "r", stdin);
+//        while(getToken()!=ENDFILE);
     parse();
     printf("end\n");
     return 0;
