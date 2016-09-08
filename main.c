@@ -28,13 +28,11 @@ typedef enum {
     START, INNUM, INID, INASSIGN, DONE, INCOMMENT, OUTCOMMENT,INLEQ, INGEQ, INDEQ,INNEQ,
     
 }StateType;
-typedef enum {stmtK, expK, decK} nodeKind;
+
+typedef enum {stmtK, decK} nodeKind;
 typedef enum {expstmtK, compdK, selectK, iteK, retK} stmtKind;
-typedef enum {idK, constK, simpK, varK, opK, callK} expKind;
-//varK to check the assign exp
-//(id, num),(void, int),(simple, var = xx), op, call
-typedef enum { intK, emptyK }varType;
-typedef enum {fundK, vardK, arrK} decKind;    //变量和函数名放在符号表中
+typedef enum {opK, assignK, idK, constK, callK} expKind;
+typedef enum {fundK, vardK, arrK } decKind;
 
 static struct {
     char* str;
@@ -48,12 +46,10 @@ typedef struct node
     int val;
     TokenType op;
     char* name;
-    int childNum;
-    decKind declaratkind;
+    decKind deckind;
     nodeKind nodekind;
     expKind expkind;
     stmtKind stmtkind;
-    varType typ;
     struct node *child[maxChild], *silbing;
 }node;
 TokenType checkReserve(char * s);
@@ -324,10 +320,16 @@ node* createNode()
     if(!t) printf("no memory");
     else
     {
+        t->name = NULL;
         t->lineno = 0;
-        t->silbing = NULL;
+        t->stmtkind = expstmtK;
+        t->expkind = opK;
+        t->nodekind = stmtK;
+        t->deckind = vardK;
+        t->op = ENDFILE;
+        t->val = 0;
         int i=0;
-        for(i=0;i<maxChild;i++) t->child[i]=NULL;
+        for(i=0;i<maxChild;i++) t->child[i]=NULL;t->silbing = NULL;
     }
     return t;
 }
@@ -353,17 +355,16 @@ node* declarationList()
 //return node{decK, vardK, varK, name}
 node* specid()
 {
-    node* t = createNode(decK);
-    t->declaratkind = vardK;    //it's a vardeclaration
+    node* t = createNode();
+
     t->lineno = line;
-    t->op = token;
-    t->expkind = idK;
-//    if(token==INT) t-= intK;
-//    else if(token==VOID) t->typ=emptyK;
+    t->op = token;      //int or void
+    t->deckind = vardK;
     
     match(token);
     t->name = copyString(tmpstring);
     match(ID);
+//    printf("id:%s op:%d line:%s\n",t->name, t->op, t->lineno);
     return t;
 }
 void varDec(node* tmp)  //if the var is arr, change the value of expkind to arrK
@@ -371,7 +372,7 @@ void varDec(node* tmp)  //if the var is arr, change the value of expkind to arrK
     switch(token)
     {
         case LSQUAB:
-            tmp->declaratkind = arrK;
+            tmp->deckind = arrK;
             match(LSQUAB);
             tmp->val = atoi(tmpstring);
             match(NUM);
@@ -390,7 +391,7 @@ void varDec(node* tmp)  //if the var is arr, change the value of expkind to arrK
 node* param()      //match the param of function declaration
 {
     node*t = specid();
-    if(token == LSQUAB) {match(LSQUAB); match(RSQUAB);}
+    if(token == LSQUAB) {match(LSQUAB); match(RSQUAB);t->deckind = arrK;}
     return t;
 }
 //just match params
@@ -401,7 +402,7 @@ node* funcDec()
     node*t = NULL;
     if(token!=VOID)
     {
-        node* t = param();
+        t = param();
         node* p = t;
         while(token!=RBRACKET)
         {
@@ -413,11 +414,13 @@ node* funcDec()
     }
     else    //if param is void, define that there is no more params after that
     {
-        t=createNode(expK);
-        t->expkind = emptyK;
+        t=createNode();
+        t->deckind = vardK;
+        t->op = token;
         match(VOID);
     }
     match(RBRACKET);
+    printf("%d\n",t);
     return t;
 }
 node* stmt()
@@ -432,6 +435,7 @@ node* stmt()
         case RETURN: q=retStmt();break;
         default: q=exps();break;
     }
+    q->nodekind = stmtK;
     return q;
 }
 //return a linked list of statement
@@ -457,7 +461,7 @@ node* stmtList()
 
 node* seleStmt()
 {
-    node* t = createNode(stmtK);
+    node* t = createNode();
     match(IF);
     match(LBRACKET);
     t->child[0]=epx();
@@ -473,7 +477,7 @@ node* seleStmt()
 }
 node* iteraStmt()
 {
-    node*t = createNode(stmtK);
+    node*t = createNode();
     match(WHILE);
     match(LBRACKET);
     t->child[0]=epx();
@@ -484,7 +488,7 @@ node* iteraStmt()
 }
 node* retStmt()
 {
-    node*t = createNode(stmtK);
+    node*t = createNode();
     match(RETURN);
     if(token!=SEMI) t->child[0]=epx();
     match(SEMI);
@@ -502,9 +506,9 @@ node* epx(void)
 {
     node* t = NULL;
     t=simple_exp();
-    if(t && t->expkind == varK) {   //in assign
-        node*p = createNode(expK);
-        p->expkind = opK;
+    if(t && t->expkind == assignK) {   //in assign
+        node*p = createNode();
+        p->expkind = opK; //? 待定
         p->op = EQ;
         p->child[0] = t;
         t=p;
@@ -515,10 +519,10 @@ node* epx(void)
 node* simple_exp()
 {
     node* t = addexp();
-    if(t->expkind==varK) return t;
+    if(t->expkind==assignK) return t;
     if(token==LT || token==LEQ || token==GT || token==GEQ || token==DEQ || token==NEQ)
     {
-        node*p = createNode(expK);
+        node*p = createNode();
         p->op=token;
         match(token);
         p->child[0]=t;
@@ -530,10 +534,10 @@ node* simple_exp()
 node* addexp()
 {
     node* t = term();
-    if(t->expkind==varK) return t;
+    if(t->expkind==assignK) return t;
     while(token==PLUS || token==MINUS)
     {
-        node* p = createNode(expK);
+        node* p = createNode();
         p->op = token;
         match(token);
         p->child[0]=t;
@@ -547,13 +551,13 @@ node* term()
     node* t = factor();
     if(token==EQ)
     {
-        t->expkind=varK;
+        t->expkind=assignK;
         match(EQ);
         return t;
     }
     while(token==TIMES || token==DIVIDE)
     {
-        node* p = createNode(expK);
+        node* p = createNode();
         p->op=token;
         match(token);
         p->child[0]=t;
@@ -567,7 +571,7 @@ node* factor()
     node* t = NULL;
     switch (token) {
         case NUM:
-            t=createNode(expK);
+            t=createNode();
             t->expkind = constK;
             t->val=atoi(tmpstring);
             match(NUM);
@@ -578,9 +582,10 @@ node* factor()
             match(RBRACKET);
             break;
         case ID:
-            t=createNode(expK);
+            t=createNode();
             t->expkind = idK;
             t->name = copyString(tmpstring);
+            t->lineno = line;
             match(ID);
             if(token==LBRACKET)     //it's call
             {
@@ -591,11 +596,8 @@ node* factor()
             else if(token==LSQUAB)  //arr
             {
                 match(LSQUAB);
-                node* p = createNode(expK);    //pay attention about the type of node
-                p->declaratkind = arrK;
-                p->name = t->name;
-                p->child[0]=epx();
-                t=p;
+                t->deckind = arrK;
+                t->child[0]=epx();
                 match(RSQUAB);
             }
             break;
@@ -621,26 +623,11 @@ node* call()
     }
     return t;
 }
-node* var()
-{
-    node* t= createNode(constK);
-    t->name = copyString(tmpstring);
-    match(ID);
-    if(token==LSQUAB)
-    {
-        match(LSQUAB);
-        node* p = createNode(constK);    //pay attention about the type of node
-        p->expkind = arrK;
-        p->child[0]=t;
-        p->child[1]=epx();
-        return p;
-    }
-    return t;
-}
+
 node* compdList()
 {
     match(LBRACE);
-    node* ret = createNode(stmtK);
+    node* ret = createNode();
     node* t = NULL;
     node* p = t;
     if(token!=RBRACE)
@@ -668,9 +655,10 @@ node* compdList()
 }
 node* Declarates()
 {
-    node* t = createNode(decK);
+    node* t = createNode();
     node* p = specid();
     t->child[0]=p;
+    t->nodekind = decK;
     switch (token) {
         case SEMI:
         case LSQUAB:
@@ -680,6 +668,7 @@ node* Declarates()
         case LBRACKET:
             t->child[1]=funcDec();
             t->child[2]=compdList();
+            t->deckind = fundK;
             break;
         default:
             printf("ERROR\n");
@@ -690,8 +679,8 @@ node* Declarates()
 node* parse()
 {
     token=getToken();
-    
     node* t=declarationList();
+    match(ENDFILE);
     return t;
 }
 
@@ -710,7 +699,7 @@ int hash(char*s)
     int i=0,tmp=0;
     while(s[i]!='\0')
     {
-        tmp=((tmp<<SHIFT) + s[i]) % size;
+        tmp= ((tmp<<SHIFT) + s[i]) % size;
         i++;
     }
     return tmp;
@@ -734,8 +723,12 @@ void travel(node *x, void(* preProc) (node*), void(* postProc)(node*))
 void nullProc(node* t){return;}
 void insertNode(node* t)
 {
-    if(!t) return;
-    if(t->expkind == idK)
+    if(!t || !t->name) return;
+    if(t->name)
+    {
+//        printf("%s\n",t->name);
+    }
+    if(t->expkind == idK || t->deckind == vardK || t->deckind == arrK)
     {
         int loc = hash(t->name);
         append(t, loc);
@@ -757,8 +750,9 @@ void append(node* t, int loc)
     if(!head) hs_table[loc] =x;
     else
     {
+        if(head && !head->typ) head->typ = x->typ;
         while(head && head->next) head=head->next;
-        head->next=x;
+        if(head->lineno != x->lineno) head->next=x;
     }
 }
 void outSympol()
@@ -767,13 +761,14 @@ void outSympol()
     {
         if(hs_table[i])
         {
-            printf("%s\t%d\t",hs_table[i]->name, hs_table[i]->typ);
+            printf("%-10s%-8d\t",hs_table[i]->name, hs_table[i]->typ);
             bucket *p = hs_table[i];
             while(p)
             {
                 printf("%d ",p->lineno);
                 p=p->next;
             }
+            printf("\n");
         }
     }
 }
