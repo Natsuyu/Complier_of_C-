@@ -500,6 +500,7 @@ node* exps()
     node* t = NULL;
     if(token==SEMI) match(token);
     else {t=epx();match(SEMI);}
+    t->stmtkind = expstmtK;
     return t;
 }
 node* epx(void)
@@ -777,6 +778,84 @@ void init()
     int i;
     for(i=0;i<size;i++) hs_table[i]=NULL;
 }
+//step 4
+void genExp(node*t,int dep);
+void genStmt(node*t);
+void genDec(node*t);
+void genCode(node*t, int level);
+
+void genExp(node*t,int dep)
+{
+    if(!t) return;
+    if(!t->child[0] && !t->child[1])
+    {
+        switch (t->expkind) {
+            case idK:
+                printf("%s ",t->name);
+                break;
+            case constK:
+                printf("%d ",t->val);
+            default:
+                break;
+        }
+    }
+    printf("t%d = ",dep);
+    genExp(t->child[0],dep+1);
+    switch (t->op) {
+        case EQ: printf("=");break;
+        case PLUS: printf("+");break;
+        case MINUS: printf("-");break;
+        case TIMES: printf("*");break;
+        case DIVIDE: printf("/");break;
+        case LT: printf("<");break;
+        case GT: printf(">");break;
+        case LEQ: printf("<=");break;
+        case GEQ: printf(">=");break;
+        case NEQ: printf("!=");break;
+        case DEQ: printf("==");break;
+    }
+    genExp(t->child[1], dep+2);
+    
+}
+void genStmt(node*t)
+{
+    expKind tmp;
+    int ret =0;
+    switch (t->stmtkind) {
+        case expstmtK:
+            ret = genExp(t,0);
+        default:
+            break;
+    }
+}
+void genDec(node*t)
+{
+    switch (t->deckind) {
+        case vardK:
+            printf("assign %s\n",t->name);
+            break;
+        case arrK:
+            printf("assign %s[%d]\n",t->name,t->val);
+        case fundK:
+            printf("assign Function %s, params:\n",t->child[0]->name);
+            genCode(t->child[1], 0);
+            genStmt(t->child[2]);
+        default:
+            break;
+    }
+}
+void genCode(node*t, int level)
+{
+    switch (t->nodekind) {
+        case decK:
+            genDec(t);
+            break;
+        case stmtK:
+            genStmt(t);
+            break;
+    }
+    genCode(t->silbing, 0);
+}
 int main()
 {
     init();
@@ -785,6 +864,7 @@ int main()
     node* root = parse();
     travel(root, insertNode, nullProc);
     outSympol();
+    genCode(root,0);
     printf("end\n");
     return 0;
 }
